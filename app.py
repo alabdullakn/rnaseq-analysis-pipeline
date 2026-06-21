@@ -172,8 +172,9 @@ CORRECTIONS = ["Benjamini-Hochberg (FDR)", "Bonferroni"]
 
 def normalize_log_cpm(count_df):
     """Library-size normalize to CPM, then log2(x+1) - for QC and rank-based tests."""
-    cpm = count_df.divide(count_df.sum(axis=0), axis=1) * 1e6
-    return np.log2(cpm + 1)
+    lib = count_df.sum(axis=0).replace(0, np.nan)
+    cpm = count_df.divide(lib, axis=1) * 1e6
+    return np.log2(cpm + 1).replace([np.inf, -np.inf], np.nan).fillna(0)
 
 
 def adjust_pvalues(pvals, method):
@@ -819,7 +820,13 @@ if run_qc:
     logcpm_qc = normalize_log_cpm(counts)
     top_var = logcpm_qc.loc[logcpm_qc.var(axis=1).sort_values(ascending=False).head(500).index]
     centered = top_var.subtract(top_var.mean(axis=1), axis=0).T.values
-    u, s, _ = np.linalg.svd(centered, full_matrices=False)
+    centered = np.nan_to_num(centered, nan=0.0, posinf=0.0, neginf=0.0)
+    try:
+        u, s, _ = np.linalg.svd(centered, full_matrices=False)
+    except np.linalg.LinAlgError:
+        # The default LAPACK driver (gesdd) can fail to converge; gesvd is slower but robust
+        from scipy.linalg import svd as _scipy_svd
+        u, s, _ = _scipy_svd(centered, full_matrices=False, lapack_driver="gesvd")
     pcs = u * s
     var_pct = (s ** 2) / (s ** 2).sum() * 100
 
