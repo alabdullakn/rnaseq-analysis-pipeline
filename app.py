@@ -415,6 +415,18 @@ def build_methods_text(active_keys, de_method=DE_METHODS[0], correction=CORRECTI
     return f"METHODS\n\n{methods}\n{cite_self}\nREFERENCES\n\n{ref_block}\n"
 
 
+def store_fig(store, name, fig):
+    """Render-then-free: save a figure to PNG/PDF bytes and close it to release memory."""
+    import matplotlib.pyplot as plt
+
+    png = io.BytesIO()
+    fig.savefig(png, format="png", dpi=200, bbox_inches="tight")
+    pdf = io.BytesIO()
+    fig.savefig(pdf, format="pdf", bbox_inches="tight")
+    store[name] = (png.getvalue(), pdf.getvalue())
+    plt.close(fig)
+
+
 def download_table(df, basename, key, label="this table"):
     """Render side-by-side CSV and Excel download buttons for a DataFrame."""
     c1, c2 = st.columns(2)
@@ -858,7 +870,7 @@ if run_qc:
     ax_pca.spines["top"].set_visible(False)
     ax_pca.spines["right"].set_visible(False)
     qc_col1.pyplot(fig_pca)
-    figures["pca"] = fig_pca
+    store_fig(figures, "pca", fig_pca)
 
     corr = logcpm_qc.corr(method="spearman")
     fig_corr, ax_corr = plt.subplots(figsize=(6, 5))
@@ -866,7 +878,7 @@ if run_qc:
                 ax=ax_corr, cbar_kws={"label": "Spearman r"})
     ax_corr.set_title("Sample-sample correlation", fontsize=12, fontweight="bold")
     qc_col2.pyplot(fig_corr)
-    figures["sample_correlation"] = fig_corr
+    store_fig(figures, "sample_correlation", fig_corr)
 
     st.caption("Samples should cluster by group on PC1/PC2; low cross-group correlation flags outliers.")
 
@@ -1004,7 +1016,7 @@ if run_volcano and "de_results" in results:
 
     plt.tight_layout()
     st.pyplot(fig)
-    figures["volcano_plot"] = fig
+    store_fig(figures, "volcano_plot", fig)
 
     vol_data = de[["log2FoldChange", "pvalue", "padj", "status", "neg_log10_p"]]
     st.markdown("**Download volcano data** (all genes with fold change, p-values, and significance call)")
@@ -1071,7 +1083,7 @@ if run_heatmap and "de_results" in results:
             g.ax_heatmap.set_xticklabels(g.ax_heatmap.get_xticklabels(), fontsize=9, rotation=45, ha="right")
             g.fig.suptitle(f"Top {len(heat_data)} DEGs - Z-score normalized", fontsize=13, fontweight="bold", y=1.02)
             st.pyplot(g.fig)
-            figures["heatmap"] = g.fig
+            store_fig(figures, "heatmap", g.fig)
         else:
             st.info("No significant genes were found in the count matrix, so no heatmap was drawn.")
     except Exception as e:
@@ -1166,7 +1178,7 @@ if run_enrichment and "de_results" in results:
 
             plt.tight_layout()
             st.pyplot(fig)
-            figures[f"enrichment_{direction}"] = fig
+            store_fig(figures, f"enrichment_{direction}", fig)
 
 # ============================================================
 # 4. GSEA
@@ -1229,7 +1241,7 @@ if run_gsea and "de_results" in results:
                 ax.spines["right"].set_visible(False)
                 plt.tight_layout()
                 st.pyplot(fig)
-                figures["gsea_nes"] = fig
+                store_fig(figures, "gsea_nes", fig)
             else:
                 st.info("No gene sets reached FDR < 0.25.")
         else:
@@ -1290,7 +1302,7 @@ if run_reactome and "de_results" in results:
                 cbar.set_label("-log$_{10}$(FDR)", fontsize=9)
                 plt.tight_layout()
                 st.pyplot(fig)
-                figures["reactome"] = fig
+                store_fig(figures, "reactome", fig)
             else:
                 st.info("No pathways reached FDR < 0.05.")
 
@@ -1349,7 +1361,7 @@ if run_splicing and "de_results" in results:
 
             plt.tight_layout()
             st.pyplot(fig)
-            figures["splicing"] = fig
+            store_fig(figures, "splicing", fig)
 
 # ============================================================
 # 7. DRUG TARGET ANALYSIS
@@ -1429,7 +1441,7 @@ if run_drug and "de_results" in results:
             ax.spines["right"].set_visible(False)
             plt.tight_layout()
             st.pyplot(fig)
-            figures["drug_targets"] = fig
+            store_fig(figures, "drug_targets", fig)
 
 # ============================================================
 # 9. TRANSCRIPTION FACTOR ANALYSIS
@@ -1525,7 +1537,7 @@ if run_tf and "de_results" in results:
 
             plt.tight_layout()
             st.pyplot(fig)
-            figures["transcription_factors"] = fig
+            store_fig(figures, "transcription_factors", fig)
 
             st.dataframe(sig_tf[["log2FoldChange", "pvalue", "padj"]].round(4), use_container_width=True)
 
@@ -1721,7 +1733,7 @@ if run_ppi and "de_results" in results:
 
                             plt.tight_layout()
                             st.pyplot(fig)
-                            figures["ppi_network"] = fig
+                            store_fig(figures, "ppi_network", fig)
 
                             # Hub analysis table
                             st.subheader("Top Hub Genes")
@@ -1782,17 +1794,10 @@ with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
             csv_data = df.to_csv()
             zf.writestr(f"tables/{name}.csv", csv_data)
 
-    # Figures
-    for name, fig in figures.items():
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=300, bbox_inches="tight")
-        buf.seek(0)
-        zf.writestr(f"figures/{name}.png", buf.read())
-
-        buf2 = io.BytesIO()
-        fig.savefig(buf2, format="pdf", bbox_inches="tight")
-        buf2.seek(0)
-        zf.writestr(f"figures/{name}.pdf", buf2.read())
+    # Figures (already rendered to bytes during the run)
+    for name, (png_bytes, pdf_bytes) in figures.items():
+        zf.writestr(f"figures/{name}.png", png_bytes)
+        zf.writestr(f"figures/{name}.pdf", pdf_bytes)
 
 zip_buffer.seek(0)
 
