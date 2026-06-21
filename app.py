@@ -313,7 +313,7 @@ def run_gsea_cached(ranked_items, db):
 
     rnk = pd.Series(dict(ranked_items)).sort_values(ascending=False)
     pre = gp.prerank(rnk=rnk, gene_sets=db, outdir=None, min_size=10, max_size=500,
-                     permutation_num=100, seed=42, verbose=False)
+                     permutation_num=50, seed=42, threads=1, verbose=False)
 
     res = pre.res2d.copy()
     if res.index.name or not isinstance(res.index, pd.RangeIndex):
@@ -1197,7 +1197,9 @@ if run_gsea and "de_results" in results:
         ranked = de["rank_metric"].dropna()
         ranked = ranked[~ranked.index.duplicated()]
 
-        gsea_dbs = ["MSigDB_Hallmark_2020", "KEGG_2021_Human"]
+        # Hallmark only on the hosted app - KEGG GSEA is heavy and KEGG terms are already
+        # covered by the Enrichr GO/KEGG step; this keeps GSEA within free-tier CPU limits.
+        gsea_dbs = ["MSigDB_Hallmark_2020"]
         gsea_results = {}
 
         ranked_items = tuple(ranked.items())
