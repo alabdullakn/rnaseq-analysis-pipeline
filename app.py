@@ -248,6 +248,9 @@ def compute_de_cached(counts, group_items, control, treatment, method, correctio
 
     de = de.dropna(subset=["padj"]).sort_values("pvalue")
 
+    # Keep the original IDs so downstream steps (e.g. heatmap) can look genes up in
+    # the raw count matrix even after the index is relabeled to symbols.
+    de["orig_id"] = de.index.astype(str)
     if convert:
         mapping = map_ids_to_symbols(de.index.tolist(), id_type)
         if mapping:
@@ -899,7 +902,7 @@ if run_de:
         col2.metric("Upregulated", n_up)
         col3.metric("Downregulated", n_down)
 
-        sig_table = de_results[de_results["status"] != "Not significant"]
+        sig_table = de_results[de_results["status"] != "Not significant"].drop(columns=["orig_id"], errors="ignore")
         top_n = st.number_input("Show top N significant genes in table", 5, 500, 20, 5)
         st.dataframe(sig_table.head(int(top_n)), use_container_width=True)
 
@@ -1020,13 +1023,6 @@ if run_heatmap and "de_results" in results:
     de = results["de_results"]
     sig = de[de["status"] != "Not significant"].copy()
 
-    # Raw counts still carry the original IDs; relabel to symbols so genes match de_results
-    counts_for_heat = counts
-    if convert_ids:
-        heat_id_map = map_ids_to_symbols(counts.index.tolist(), gene_id_type)
-        counts_for_heat = counts.rename(index=lambda x: heat_id_map.get(str(x), str(x)))
-        counts_for_heat = counts_for_heat[~counts_for_heat.index.duplicated(keep="first")]
-
     hc1, hc2, hc3 = st.columns(3)
     n_top = hc1.slider("Top genes per direction", 10, 50, 25, 5, key="heatmap_n")
     heat_scale = hc2.slider(
@@ -1040,32 +1036,46 @@ if run_heatmap and "de_results" in results:
     top_down = sig[sig["status"] == "Downregulated"].nsmallest(n_top, "pvalue")
     top_genes = pd.concat([top_up, top_down])
 
-    heatmap_genes = [g for g in top_genes.index if g in counts_for_heat.index]
-    if heatmap_genes:
-        heat_data = counts_for_heat.loc[heatmap_genes].copy()
-        # Log2 transform + z-score per gene
-        heat_data = np.log2(heat_data + 1)
-        heat_data = heat_data.subtract(heat_data.mean(axis=1), axis=0).div(heat_data.std(axis=1), axis=0)
-        heat_data = heat_data.fillna(0)
+    try:
+        # Look genes up in the raw counts by their ORIGINAL id (counts aren't relabeled),
+        # then display them with their gene symbol. No whole-matrix ID conversion needed.
+        counts_idx = counts.copy()
+        counts_idx.index = counts_idx.index.astype(str)
+        if "orig_id" in top_genes.columns:
+            wanted = [(o, sym) for o, sym in zip(top_genes["orig_id"].astype(str), top_genes.index)
+                      if o in counts_idx.index]
+        else:
+            wanted = [(g, g) for g in top_genes.index.astype(str) if g in counts_idx.index]
 
-        col_colors = [("#3498db" if group_assignments[s] == gname_control else "#e74c3c") for s in heat_data.columns]
+        if wanted:
+            heat_data = counts_idx.loc[[o for o, _ in wanted]].copy()
+            heat_data.index = [sym for _, sym in wanted]
+            heat_data = heat_data[~heat_data.index.duplicated(keep="first")]
 
-        g = sns.clustermap(heat_data, cmap=heat_cmap, center=0,
-                           vmin=-heat_scale, vmax=heat_scale,
-                           col_colors=col_colors, row_cluster=True, col_cluster=False,
-                           yticklabels=True, xticklabels=True,
-                           figsize=(max(6, len(heat_data.columns) * 0.8), max(8, len(heat_data) * 0.25)),
-                           cbar_pos=(0.02, 0.83, 0.03, 0.13),
-                           dendrogram_ratio=(0.14, 0.04))
-        # Title above the colorbar instead of a rotated side-label (which overlapped the heatmap)
-        g.ax_cbar.set_title("Z-score", fontsize=9, pad=6)
-        g.ax_heatmap.set_yticklabels(g.ax_heatmap.get_yticklabels(), fontsize=7)
-        g.ax_heatmap.set_xticklabels(g.ax_heatmap.get_xticklabels(), fontsize=9, rotation=45, ha="right")
-        g.fig.suptitle(f"Top {len(heat_data)} DEGs - Z-score normalized", fontsize=13, fontweight="bold", y=1.02)
-        st.pyplot(g.fig)
-        figures["heatmap"] = g.fig
-    else:
-        st.info("Top DE genes were not found in the count matrix after ID mapping, so no heatmap was drawn.")
+            # Log2 transform + z-score per gene
+            heat_data = np.log2(heat_data + 1)
+            heat_data = heat_data.subtract(heat_data.mean(axis=1), axis=0).div(heat_data.std(axis=1), axis=0)
+            heat_data = heat_data.replace([np.inf, -np.inf], np.nan).fillna(0)
+
+            col_colors = [("#3498db" if group_assignments[s] == gname_control else "#e74c3c") for s in heat_data.columns]
+
+            g = sns.clustermap(heat_data, cmap=heat_cmap, center=0,
+                               vmin=-heat_scale, vmax=heat_scale,
+                               col_colors=col_colors, row_cluster=len(heat_data) > 1, col_cluster=False,
+                               yticklabels=True, xticklabels=True,
+                               figsize=(max(6, len(heat_data.columns) * 0.8), max(8, len(heat_data) * 0.25)),
+                               cbar_pos=(0.02, 0.83, 0.03, 0.13),
+                               dendrogram_ratio=(0.14, 0.04))
+            g.ax_cbar.set_title("Z-score", fontsize=9, pad=6)
+            g.ax_heatmap.set_yticklabels(g.ax_heatmap.get_yticklabels(), fontsize=7)
+            g.ax_heatmap.set_xticklabels(g.ax_heatmap.get_xticklabels(), fontsize=9, rotation=45, ha="right")
+            g.fig.suptitle(f"Top {len(heat_data)} DEGs - Z-score normalized", fontsize=13, fontweight="bold", y=1.02)
+            st.pyplot(g.fig)
+            figures["heatmap"] = g.fig
+        else:
+            st.info("No significant genes were found in the count matrix, so no heatmap was drawn.")
+    except Exception as e:
+        st.warning(f"Heatmap could not be generated: {e}")
 
 # ============================================================
 # 4. GO/KEGG ENRICHMENT (Enrichr API)
