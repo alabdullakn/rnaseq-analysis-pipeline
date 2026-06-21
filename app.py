@@ -310,7 +310,7 @@ def run_gsea_cached(ranked_items, db):
 
     rnk = pd.Series(dict(ranked_items)).sort_values(ascending=False)
     pre = gp.prerank(rnk=rnk, gene_sets=db, outdir=None, min_size=10, max_size=500,
-                     permutation_num=1000, seed=42, verbose=False)
+                     permutation_num=100, seed=42, verbose=False)
 
     res = pre.res2d.copy()
     if res.index.name or not isinstance(res.index, pd.RangeIndex):
@@ -802,6 +802,13 @@ if not st.session_state.get("analysis_ran"):
 # ============================================================
 results = {}
 figures = {}
+
+# Free matplotlib figures left open by the previous rerun. Without this, every
+# threshold tweak leaks ~12 figures and the app eventually runs out of memory.
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+plt.close("all")
 
 progress = st.progress(0, text="Starting analysis...")
 
